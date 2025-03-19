@@ -20,6 +20,7 @@ from .argoverse_scene_flow import (
     CATEGORY_MAP,
     ArgoverseNoFlowSequenceLoader,
     ArgoverseSceneFlowSequenceLoader,
+    ArgoverseMultiStepFlowSequenceLoader,
 )
 from .av2_metacategories import (
     BUCKETED_METACATAGORIES,
@@ -72,6 +73,7 @@ class Argoverse2CausalSceneFlow(CausalSeqLoaderDataset):
         eval_args=dict(),
         load_boxes: bool = False,
         load_flow: bool = True,
+        load_multistepflow: bool = False,
         use_cache=True,
         **kwargs,
     ) -> None:
@@ -85,6 +87,14 @@ class Argoverse2CausalSceneFlow(CausalSeqLoaderDataset):
                 root_dir,
                 use_gt_flow=use_gt_flow,
                 flow_data_path=flow_data_path,
+                **kwargs,
+            )
+        elif load_multistepflow:
+            self.sequence_loader = ArgoverseMultiStepFlowSequenceLoader(
+                root_dir,
+                use_gt_flow=use_gt_flow,
+                flow_data_path=flow_data_path,
+                subsequence_length=subsequence_length,
                 **kwargs,
             )
         else:

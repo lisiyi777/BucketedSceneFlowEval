@@ -97,6 +97,46 @@ class EgoLidarFlow:
         assert mask.dtype == bool, f"mask must be a boolean array, got {mask.dtype}"
         return EgoLidarFlow(full_flow=self.full_flow[mask], mask=self.mask[mask])
 
+@dataclass
+class MultiStepEgoLidarFlow(EgoLidarFlow):
+    """
+    Ego frame lidar flow from the ego frame of P0 to multiple future frames.
+    full_flow represents flow from P0 to P1, while multi_step_flows contains flows from P0 to P2, P3, etc.
+    """
+    multi_step_flows: list[VectorArray]
+
+    def __post_init__(self):
+        super().__post_init__()
+        # Validate multi-step flows
+        for step, flow in enumerate(self.multi_step_flows, start=2):
+            assert flow.shape == self.full_flow.shape, (
+                f"Multi-step flow at step {step} must have same shape as full_flow, "
+                f"got {flow.shape} vs {self.full_flow.shape}"
+            )
+
+    @staticmethod
+    def make_no_flow(flow_dim: int) -> "MultiStepEgoLidarFlow":
+        return MultiStepEgoLidarFlow(
+            full_flow=np.zeros((flow_dim, 3), dtype=np.float32),
+            mask=np.zeros(flow_dim, dtype=bool),
+            multi_step_flows=[]
+        )
+    @property
+    def valid_flow(self) -> VectorArray:
+        return self.full_flow[self.mask]
+    
+    def mask_points(self, mask: MaskArray) -> "MultiStepEgoLidarFlow":
+        assert isinstance(mask, np.ndarray), f"mask must be an ndarray, got {type(mask)}"
+        assert mask.ndim == 1, f"mask must be a 1D array, got {mask.ndim}"
+        assert mask.dtype == bool, f"mask must be a boolean array, got {mask.dtype}"
+        
+        masked_multi_step_flows = [flow[mask] for flow in self.multi_step_flows]
+        
+        return MultiStepEgoLidarFlow(
+            full_flow=self.full_flow[mask], 
+            mask=self.mask[mask],
+            multi_step_flows=masked_multi_step_flows
+        )
 
 @dataclass
 class EgoLidarDistance:

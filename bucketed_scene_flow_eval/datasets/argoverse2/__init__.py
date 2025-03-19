@@ -4,6 +4,8 @@ from .argoverse_scene_flow import (
     ArgoverseNoFlowSequenceLoader,
     ArgoverseSceneFlowSequence,
     ArgoverseSceneFlowSequenceLoader,
+    ArgoverseSceneMultiStepFlowSequence,
+    ArgoverseMultiStepFlowSequenceLoader,
 )
 
 from .argoverse_box_annotations import (
@@ -21,4 +23,6 @@ __all__ = [
     "ArgoverseRawSequenceLoader",
     "ArgoverseSceneFlowSequence",
     "ArgoverseSceneFlowSequenceLoader",
+    "ArgoverseSceneMultiStepFlowSequence",
+    "ArgoverseMultiStepFlowSequenceLoader",
 ]

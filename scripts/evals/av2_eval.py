@@ -6,11 +6,13 @@ os.environ["OMP_NUM_THREADS"] = "1"
 import argparse
 import multiprocessing
 from pathlib import Path
+import json
 
 import tqdm
 
 from bucketed_scene_flow_eval.datasets import Argoverse2CausalSceneFlow
 from bucketed_scene_flow_eval.eval import Evaluator
+from bucketed_scene_flow_eval.utils import load_json, save_json
 
 
 def _make_range_shards(total_len: int, num_shards: int) -> list[tuple[int, int]]:
@@ -90,6 +92,7 @@ def run_eval(
     output_path: Path,
     cpu_count: int,
     cache_root: Path,
+    length_file: Path,
     every_kth: int = 5,
     eval_type: str = "bucketed_epe",
     verbose: bool = True,
@@ -101,54 +104,125 @@ def run_eval(
     # Make the output directory if it doesn't exist
     output_path.mkdir(parents=True, exist_ok=True)
 
-    gt_dataset = Argoverse2CausalSceneFlow(
-        root_dir=data_dir,
-        flow_data_path=gt_flow_dir,
-        with_ground=False,
-        with_rgb=False,
-        use_gt_flow=True,
-        eval_type=eval_type,
-        eval_args=dict(output_path=output_path),
-        cache_root=cache_root,
-    )
+    # gt_dataset = Argoverse2CausalSceneFlow(
+    #     root_dir=data_dir,
+    #     flow_data_path=gt_flow_dir,
+    #     with_ground=False,
+    #     with_rgb=False,
+    #     use_gt_flow=True,
+    #     eval_type=eval_type,
+    #     eval_args=dict(output_path=output_path),
+    #     cache_root=cache_root,
+    # )
 
-    est_dataset = Argoverse2CausalSceneFlow(
-        root_dir=data_dir,
-        flow_data_path=est_flow_dir,
-        with_ground=False,
-        with_rgb=False,
-        use_gt_flow=False,
-        use_cache=False,
-        eval_type=eval_type,
-        cache_root=cache_root,
-    )
+    # est_dataset = Argoverse2CausalSceneFlow(
+    #     root_dir=data_dir,
+    #     flow_data_path=est_flow_dir,
+    #     with_ground=False,
+    #     with_rgb=False,
+    #     use_gt_flow=False,
+    #     use_cache=False,
+    #     eval_type=eval_type,
+    #     cache_root=cache_root,
+    # )
 
-    dataset_evaluator = gt_dataset.evaluator()
+    # dataset_evaluator = gt_dataset.evaluator()
 
-    assert len(gt_dataset) == len(
-        est_dataset
-    ), f"GT and estimated datasets must be the same length, but are {len(gt_dataset)} and {len(est_dataset)} respectively."
+    # assert len(gt_dataset) == len(
+    #     est_dataset
+    # ), f"GT and estimated datasets must be the same length, but are {len(gt_dataset)} and {len(est_dataset)} respectively."
+    # # Shard the dataset into pieces for each CPU
+    # shard_lists = _make_index_shards(gt_dataset, cpu_count, every_kth)
+    # args_list = [
+    #     (shard_idx, shard_list, gt_dataset, est_dataset, dataset_evaluator, verbose)
+    #     for shard_idx, shard_list in enumerate(shard_lists)
+    # ]
 
-    # Shard the dataset into pieces for each CPU
-    shard_lists = _make_index_shards(gt_dataset, cpu_count, every_kth)
-    args_list = [
-        (shard_idx, shard_list, gt_dataset, est_dataset, dataset_evaluator, verbose)
-        for shard_idx, shard_list in enumerate(shard_lists)
-    ]
+    # if cpu_count > 1:
+    #     print(f"Running evaluation on {len(gt_dataset)} scenes using {cpu_count} CPUs.")
+    #     # Run the evaluation in parallel
+    #     with multiprocessing.Pool(cpu_count) as pool:
+    #         sharded_evaluators = pool.map(_work_wrapper, args_list)
+    # else:
+    #     print(f"Running evaluation on {len(gt_dataset)} scenes using 1 CPU.")
+    #     # Run the evaluation serially
+    #     sharded_evaluators = [_work_wrapper(args) for args in args_list]
 
-    if cpu_count > 1:
-        print(f"Running evaluation on {len(gt_dataset)} scenes using {cpu_count} CPUs.")
-        # Run the evaluation in parallel
-        with multiprocessing.Pool(cpu_count) as pool:
-            sharded_evaluators = pool.map(_work_wrapper, args_list)
-    else:
-        print(f"Running evaluation on {len(gt_dataset)} scenes using 1 CPU.")
-        # Run the evaluation serially
-        sharded_evaluators = [_work_wrapper(args) for args in args_list]
+    # # Combine the sharded evaluators
+    # gathered_evaluator: Evaluator = sum(sharded_evaluators)
+    # gathered_evaluator.compute_results()
+    # 
+    # 
+    # Get list of sequence IDs by reading folder names in data_dir
+    # sequence_ids = [d.name for d in data_dir.iterdir() if d.is_dir()]
+    sequence_info = load_json(length_file)
+    sequence_ids = list(sequence_info.keys())
+    sequence_lengths = {seq_id: length for seq_id, length in sequence_info.items()}
+    
+    print(f"Found {len(sequence_ids)} sequences")
+    
+    # Dictionary to store results for all sequences
+    all_sequence_results = {}
+    
+    # Evaluate each sequence individually
+    for seq_id in sequence_ids:
+        print(f"\nEvaluating sequence {seq_id}")
+        
+        # Create datasets for just this sequence
+        seq_gt_dataset = Argoverse2CausalSceneFlow(
+            root_dir=data_dir,
+            flow_data_path=gt_flow_dir,
+            with_ground=False,
+            with_rgb=False,
+            use_gt_flow=True,
+            eval_type=eval_type,
+            eval_args=dict(output_path=output_path),
+            cache_root=cache_root,
+            log_subset=seq_id
+        )
 
-    # Combine the sharded evaluators
-    gathered_evaluator: Evaluator = sum(sharded_evaluators)
-    gathered_evaluator.compute_results()
+        seq_est_dataset = Argoverse2CausalSceneFlow(
+            root_dir=data_dir, 
+            flow_data_path=est_flow_dir,
+            with_ground=False,
+            with_rgb=False,
+            use_gt_flow=False,
+            use_cache=False,
+            eval_type=eval_type,
+            cache_root=cache_root,
+            log_subset=seq_id
+        )
+
+        seq_evaluator = seq_gt_dataset.evaluator()
+
+        for i in range(0, min(sequence_lengths[seq_id], 160)-1, every_kth):
+            gt_frame0, gt_frame1 = seq_gt_dataset[i]
+            est_frame0, est_frame1 = seq_est_dataset[i]
+            seq_evaluator.eval(est_frame0.flow, gt_frame0)
+        # Compute results for this sequence
+        sequence_results = seq_evaluator.compute_results()
+        
+        # Extract just the static_epe and dynamic_error
+        static_epe = sequence_results['CAR'][0]  # First element is static_epe
+        dynamic_error = sequence_results['CAR'][1]  # Second element is dynamic_error
+        
+        print(f"Sequence {seq_id}:")
+        print(f"  Static EPE: {static_epe:.3f}")
+        print(f"  Dynamic Error: {dynamic_error:.3f}")
+        
+        # Store results for this sequence
+        all_sequence_results[seq_id] = {
+            "static_epe": static_epe,
+            "dynamic_error": dynamic_error
+        }
+    
+    # Save all results to a JSON file
+    results_file = output_path / "per_sequence_results.json"
+    with open(results_file, 'w') as f:
+        json.dump(all_sequence_results, f, indent=2)
+    
+    print(f"\nSaved per-sequence results to {results_file}")
+    
 
 
 if __name__ == "__main__":
@@ -160,6 +234,7 @@ if __name__ == "__main__":
     parser.add_argument("gt_flow_dir", type=Path, help="Path gt flow directory")
     parser.add_argument("est_flow_dir", type=Path, help="Path to the estimated flow directory")
     parser.add_argument("output_path", type=Path, help="Path to save the results")
+    parser.add_argument("length_file", type=Path, help="Sequence length information")
     parser.add_argument(
         "--cpu_count",
         type=int,
@@ -185,6 +260,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     run_eval(
+        length_file=args.length_file,
         data_dir=args.data_dir,
         gt_flow_dir=args.gt_flow_dir,
         est_flow_dir=args.est_flow_dir,
