@@ -328,3 +328,7 @@ class BucketedEPEEvaluator(PerFrameSceneFlowEvaluator):
             str(k): (v.static_epe, v.dynamic_error)
             for k, v in matrix.get_overall_class_errors().items()
         }
+
+        average_static_epe, average_dynamic_error = matrix.get_mean_average_values(normalized=True).to_tuple()
+        # return matrix.get_mean_average_values(normalized=True).to_tuple()
+

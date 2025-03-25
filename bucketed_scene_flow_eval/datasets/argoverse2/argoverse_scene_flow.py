@@ -2,6 +2,9 @@ from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
+import psutil
+
+import os
 
 from bucketed_scene_flow_eval.datasets.argoverse2.argoverse_raw_data import (
     DEFAULT_POINT_CLOUD_RANGE,
@@ -148,6 +151,7 @@ class ArgoverseSceneFlowSequence(ArgoverseRawSequence, AbstractAVLidarSequence):
             **vars(raw_item.pc),
             full_pc_classes=classes_0,
         )
+
         return TimeSyncedSceneFlowFrame(
             pc=supervised_pc,
             auxillary_pc=raw_item.auxillary_pc,
@@ -414,33 +418,17 @@ class ArgoverseSceneMultiStepFlowSequence(ArgoverseSceneFlowSequence):
         super().__init__(
             log_id,
             dataset_dir,
+            flow_dir,
             with_rgb=with_rgb,
             with_auxillary_pc=with_auxillary_pc,
+            with_classes=with_classes,
             **kwargs,
         )
-        self.with_classes = with_classes
-        self.flow_data_files: list[Path] = []
         self.rollout_steps = rollout_steps
-        self._prep_flow(flow_dir)
-
-    def _prep_flow(self, flow_dir: Path):
-        # The flow data does not have a timestamp, so we need to just rely on the order of the files.
-        # Only select files that have number and nothing else, e.g. 0000000069.feather, not 0000000069_occ.feather
-        self.flow_data_files = sorted(
-            file for file in flow_dir.glob("*.feather") if file.stem.isdigit()
-        )
-
-        assert len(self.timestamp_list) > len(
-            self.flow_data_files
-        ), f"More flow data files in {flow_dir} than pointclouds in {self.dataset_dir};  {len(self.timestamp_list)} vs {len(self.flow_data_files)}"
-
-        # The first len(self.flow_data_files) timestamps have flow data.
-        # We keep those timestamps, plus the final timestamp.
-        self.timestamp_list = self.timestamp_list[: len(self.flow_data_files) + 1]
 
     def _load_flow_feather(
         self, idx: int, classes_0: SemanticClassIdArray
-    ) -> tuple[list[VectorArray], MaskArray, SemanticClassIdArray]:
+    ) -> tuple[VectorArray, MaskArray, SemanticClassIdArray]:
         assert idx < len(self), f"idx {idx} out of range, len {len(self)} for {self.dataset_dir}"
         # There is no flow information for the last pointcloud in the sequence.
         assert (
@@ -466,8 +454,10 @@ class ArgoverseSceneMultiStepFlowSequence(ArgoverseSceneFlowSequence):
         
         # Check for additional steps and load them
         for step in range(2, self.rollout_steps + 1):
-            assert f"flow_tx_m_step{step}" in flow_data, f"flow_tx_m_step{step} not found in {flow_data_file.absolute()}"
-            xs = flow_data[f"flow_tx_m_step{step}"].values
+            flow_key = f"flow_tx_m_step{step}"
+            if flow_key not in flow_data:
+                break
+            xs = flow_data[flow_key].values
             ys = flow_data[f"flow_ty_m_step{step}"].values
             zs = flow_data[f"flow_tz_m_step{step}"].values
             flows.append(np.stack([xs, ys, zs], axis=1))
@@ -475,7 +465,7 @@ class ArgoverseSceneMultiStepFlowSequence(ArgoverseSceneFlowSequence):
         if self.with_classes:
             classes_0 = flow_data["classes_0"].values
 
-        return flows, is_valid_arr, classes_0
+        return np.stack(flows, axis=0), is_valid_arr, classes_0
 
     def _load_no_flow(
         self, raw_item: TimeSyncedRawFrame, metadata: TimeSyncedAVLidarData
@@ -518,9 +508,9 @@ class ArgoverseMultiStepFlowSequenceLoader(ArgoverseSceneFlowSequenceLoader):
             flow_data_path=flow_data_path, 
             use_gt_flow=use_gt_flow,
             log_subset=log_subset,
-            rollout_steps=rollout_steps,
             **kwargs
         )
+        self.rollout_steps=rollout_steps
 
     def _sanitize_flow_data_path(
         self,

@@ -103,15 +103,16 @@ class MultiStepEgoLidarFlow(EgoLidarFlow):
     Ego frame lidar flow from the ego frame of P0 to multiple future frames.
     full_flow represents flow from P0 to P1, while multi_step_flows contains flows from P0 to P2, P3, etc.
     """
-    multi_step_flows: list[VectorArray]
+    multi_step_flows: VectorArray
 
     def __post_init__(self):
         super().__post_init__()
-        # Validate multi-step flows
-        for step, flow in enumerate(self.multi_step_flows, start=2):
-            assert flow.shape == self.full_flow.shape, (
-                f"Multi-step flow at step {step} must have same shape as full_flow, "
-                f"got {flow.shape} vs {self.full_flow.shape}"
+        if len(self.multi_step_flows) > 0:
+            assert self.multi_step_flows.ndim == 3, f"multi_step_flows must be a 3D array, got {self.multi_step_flows.ndim}"
+            # Validate multi-step flows shape matches full_flow
+            assert self.multi_step_flows.shape[1:] == self.full_flow.shape, (
+                f"Multi-step flows must have same point dimensions as full_flow, "
+                f"got {self.multi_step_flows.shape[1:]} vs {self.full_flow.shape}"
             )
 
     @staticmethod
@@ -119,8 +120,9 @@ class MultiStepEgoLidarFlow(EgoLidarFlow):
         return MultiStepEgoLidarFlow(
             full_flow=np.zeros((flow_dim, 3), dtype=np.float32),
             mask=np.zeros(flow_dim, dtype=bool),
-            multi_step_flows=[]
+            multi_step_flows=np.zeros((0, flow_dim, 3), dtype=np.float32)
         )
+
     @property
     def valid_flow(self) -> VectorArray:
         return self.full_flow[self.mask]
@@ -130,7 +132,10 @@ class MultiStepEgoLidarFlow(EgoLidarFlow):
         assert mask.ndim == 1, f"mask must be a 1D array, got {mask.ndim}"
         assert mask.dtype == bool, f"mask must be a boolean array, got {mask.dtype}"
         
-        masked_multi_step_flows = [flow[mask] for flow in self.multi_step_flows]
+        if len(self.multi_step_flows) > 0:
+            masked_multi_step_flows = self.multi_step_flows[:, mask]
+        else:
+            masked_multi_step_flows = np.zeros((0, np.sum(mask), 3), dtype=np.float32)
         
         return MultiStepEgoLidarFlow(
             full_flow=self.full_flow[mask], 
@@ -138,6 +143,16 @@ class MultiStepEgoLidarFlow(EgoLidarFlow):
             multi_step_flows=masked_multi_step_flows
         )
 
+    def _get_multi_step_length(self) -> int:
+        return len(self.multi_step_flows)
+
+    def make_ego_lidar_flow(self, index: int) -> "EgoLidarFlow":
+        assert index < self._get_multi_step_length(), f"index must be less than {self._get_multi_step_length()}, got {index}"
+        return EgoLidarFlow(
+            full_flow=self.multi_step_flows[index],
+            mask=self.mask
+        )
+    
 @dataclass
 class EgoLidarDistance:
     distances: np.ndarray

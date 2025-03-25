@@ -82,19 +82,18 @@ class Argoverse2CausalSceneFlow(CausalSeqLoaderDataset):
                 root_dir,
                 **kwargs,
             )
-        elif load_flow:
-            self.sequence_loader = ArgoverseSceneFlowSequenceLoader(
-                root_dir,
-                use_gt_flow=use_gt_flow,
-                flow_data_path=flow_data_path,
-                **kwargs,
-            )
         elif load_multistepflow:
             self.sequence_loader = ArgoverseMultiStepFlowSequenceLoader(
                 root_dir,
                 use_gt_flow=use_gt_flow,
                 flow_data_path=flow_data_path,
-                subsequence_length=subsequence_length,
+                **kwargs,
+            )
+        elif load_flow:
+            self.sequence_loader = ArgoverseSceneFlowSequenceLoader(
+                root_dir,
+                use_gt_flow=use_gt_flow,
+                flow_data_path=flow_data_path,
                 **kwargs,
             )
         else:
