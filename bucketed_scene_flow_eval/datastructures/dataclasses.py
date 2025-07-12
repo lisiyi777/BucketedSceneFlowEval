@@ -178,7 +178,6 @@ class EgoLidarDistance:
         return self.distances.shape
 
 
-@dataclass
 class PointCloudFrame:
     """A Point Cloud Frame.
 
@@ -186,11 +185,19 @@ class PointCloudFrame:
     pose: a PoseInfo object that specifies the transformations from sensor -> ego as well as ego -> global.
     mask: a mask for validity in the point cloud, validity is determined by the dataloader and could be any of the following:
         if the point is valid for the purpose of computing scene flow, if the point is ground or not ground, or any other criteria enforced by the dataloader
+    is_real: optional boolean mask indicating which points are from the original scan (vs. densified)
     """
-
-    full_pc: PointCloud
-    pose: PoseInfo
-    mask: MaskArray
+    def __init__(
+        self,
+        full_pc: PointCloud,
+        pose: PoseInfo,
+        mask: MaskArray,
+        is_real: Optional[np.ndarray] = None,
+    ):
+        self.full_pc = full_pc
+        self.pose = pose
+        self.mask = mask
+        self.is_real = is_real
 
     @property
     def pc(self) -> PointCloud:
@@ -224,6 +231,7 @@ class PointCloudFrame:
             full_pc=self.full_pc.mask_points(mask),
             pose=self.pose,
             mask=self.mask[mask],
+            is_real=(self.is_real[mask] if self.is_real is not None else None),
         )
 
     def flow(self, flow: EgoLidarFlow) -> "PointCloudFrame":
@@ -231,6 +239,7 @@ class PointCloudFrame:
             full_pc=self.full_pc.flow_masked(flow.valid_flow, flow.mask),
             pose=self.pose,
             mask=self.mask,
+            is_real=self.is_real,
         )
 
     def __add__(self, other: "PointCloudFrame") -> "PointCloudFrame":
@@ -247,17 +256,30 @@ class PointCloudFrame:
         assert (
             self.pose == other.pose
         ), f"point clouds must have the same pose, got {self.pose} and {other.pose}"
+
+        combined_is_real = None
+        if self.is_real is not None and other.is_real is not None:
+            combined_is_real = np.hstack((self.is_real, other.is_real))
+
         return PointCloudFrame(
             full_pc=np.hstack((self.full_pc, other.full_pc)),
             pose=self.pose,
             mask=np.hstack((self.mask, other.mask)),
+            is_real=combined_is_real,
         )
 
-
-@dataclass
 class SupervisedPointCloudFrame(PointCloudFrame):
-    full_pc_classes: SemanticClassIdArray
-
+    def __init__(
+        self,
+        full_pc: PointCloud,
+        pose: PoseInfo,
+        mask: MaskArray,
+        full_pc_classes: SemanticClassIdArray,
+        is_real: Optional[np.ndarray] = None,
+    ):
+        super().__init__(full_pc, pose, mask, is_real)
+        self.full_pc_classes = full_pc_classes
+        
     def __post_init__(self):
         # Check pc_classes
         assert isinstance(
@@ -325,6 +347,13 @@ class RGBFrame:
             camera_projection=self.camera_projection.rescale(factor),
         )
 
+@dataclass
+class PerPointFeature:
+    feature: np.ndarray
+
+    def __repr__(self) -> str:
+        return f"PerPointFeature(feature={self.feature})"    
+    
 
 @dataclass
 class RGBFrameLookup:
@@ -348,8 +377,7 @@ class RGBFrameLookup:
         return self.lookup[key]
 
     def __len__(self) -> int:
-        return len(self.lookup)
-
+        return len(self.lookup)        
 
 @dataclass
 class BoundingBox:
@@ -377,6 +405,7 @@ class TimeSyncedRawFrame:
     pc: PointCloudFrame
     auxillary_pc: PointCloudFrame | None
     rgbs: RGBFrameLookup
+    per_point_features: Optional[PerPointFeature] = None
     log_id: str
     log_idx: int
     log_timestamp: int

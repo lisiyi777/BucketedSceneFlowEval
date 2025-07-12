@@ -73,7 +73,7 @@ class Argoverse2CausalSceneFlow(CausalSeqLoaderDataset):
         eval_args=dict(),
         load_boxes: bool = False,
         load_flow: bool = True,
-        load_multistepflow: bool = False,
+        rollout_steps: int = 1,
         use_cache=True,
         **kwargs,
     ) -> None:
@@ -82,11 +82,12 @@ class Argoverse2CausalSceneFlow(CausalSeqLoaderDataset):
                 root_dir,
                 **kwargs,
             )
-        elif load_multistepflow:
+        elif rollout_steps > 1:
             self.sequence_loader = ArgoverseMultiStepFlowSequenceLoader(
                 root_dir,
                 use_gt_flow=use_gt_flow,
                 flow_data_path=flow_data_path,
+                rollout_steps = rollout_steps,
                 **kwargs,
             )
         elif load_flow:

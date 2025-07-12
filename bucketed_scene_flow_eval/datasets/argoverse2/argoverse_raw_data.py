@@ -21,6 +21,7 @@ from bucketed_scene_flow_eval.datastructures import (
     PoseInfo,
     RGBFrame,
     RGBFrameLookup,
+    PerPointFeature,
     RGBImage,
     RGBImageCrop,
     TimeSyncedAVLidarData,
@@ -174,6 +175,60 @@ class RangeCropType(enum.Enum):
     GLOBAL = "global"
     EGO = "ego"
 
+class PerPointFeatureType(enum.Enum):
+    RGB = "rgb"
+    DINOV2 = "dinov2"
+
+class PerPointFeatureInfo:
+    """
+    Stores information about per-point features.
+    """
+    def __init__(
+        self,
+        feature_dir: Path,
+        feature_type: PerPointFeatureType | str,
+        verbose: bool = False,
+    ):
+        self.feature_dir = feature_dir
+        if isinstance(feature_type, str):
+            feature_type = PerPointFeatureType(feature_type.lower())
+        self.feature_type = feature_type
+        self.verbose = verbose
+
+        self.idx_to_feature_file_map = {}
+        assert self.feature_dir.exists(), f"feature_dir {self.feature_dir} does not exist"
+        feature_files = sorted(self.feature_dir.glob("*.feather"))            
+        for file_idx, feature_file in enumerate(feature_files):
+            # file_idx = int(feature_file.stem)
+            self.idx_to_feature_file_map[file_idx] = feature_file
+
+    def idx_to_feature_path(self, feature_idx: int) -> Path:
+        assert (
+            feature_idx in self.idx_to_feature_file_map
+        ), f"feature_timestamp {feature_idx} not found"
+        return self.idx_to_feature_file_map[feature_idx]
+
+    def load_feature(self, idx: int) -> PerPointFeature:
+        feature_path = self.idx_to_feature_path(idx)
+        feature_data = pd.read_feather(feature_path)
+        if self.feature_type == PerPointFeatureType.RGB:
+            feature = np.stack([
+                feature_data["r"].values,
+                feature_data["g"].values,
+                feature_data["b"].values
+            ], axis=-1)
+            return PerPointFeature(feature=feature)
+        elif self.feature_type == PerPointFeatureType.DINOV2:
+            feature_columns = sorted([col for col in feature_data.columns if col.startswith("f_")])
+            
+            if self.verbose:
+                print(f"[DINOv2] Loading {len(feature_columns)}D feature from {feature_path.name}")
+
+            feature_array = np.stack([feature_data[col].values for col in feature_columns], axis=-1)
+            return PerPointFeature(feature=feature_array)
+        else:
+            raise ValueError(f"Unknown feature type {self.feature_type}")
+
 
 class ArgoverseRawSequence(AbstractSequence):
     """
@@ -193,6 +248,7 @@ class ArgoverseRawSequence(AbstractSequence):
         with_auxillary_pc: bool = False,
         point_cloud_range: Optional[PointCloudRange] = DEFAULT_POINT_CLOUD_RANGE,
         range_crop_type: RangeCropType | str = RangeCropType.GLOBAL,
+        per_point_feature_type: Optional[PerPointFeatureType | str] = None,
         sample_every: Optional[int] = None,
         camera_names: list[str] = [
             "ring_side_left",
@@ -200,8 +256,11 @@ class ArgoverseRawSequence(AbstractSequence):
             "ring_front_center",
             "ring_front_right",
             "ring_side_right",
+            "ring_rear_left",
+            "ring_rear_right",
         ],
         expected_camera_shape: tuple[int, int, int] = (1550, 2048, 3),
+        lidar_source: str = "lidar",
     ):
         self.log_id = log_id
         self.point_cloud_range = point_cloud_range
@@ -221,6 +280,7 @@ class ArgoverseRawSequence(AbstractSequence):
         }
         info_timestamps = set(self.timestamp_to_info_idx_map.keys())
 
+        self.lidar_source = lidar_source
         (
             self.lidar_frame_paths,
             self.timestamp_to_lidar_file_map,
@@ -231,6 +291,7 @@ class ArgoverseRawSequence(AbstractSequence):
         self.with_auxillary_pc = with_auxillary_pc
 
         self.camera_names = camera_names
+
         if not with_rgb:
             camera_names = []
             self.camera_names = []
@@ -239,6 +300,12 @@ class ArgoverseRawSequence(AbstractSequence):
             camera_name: self._prep_camera_info(camera_name, expected_camera_shape)
             for camera_name in camera_names
         }
+
+        if isinstance(per_point_feature_type, str):
+            self.per_point_feature_type = PerPointFeatureType(per_point_feature_type.lower())
+            self.per_point_feature_info = self._prep_per_point_feature_info()
+        else:
+            self.per_point_feature_type = None
 
         self.timestamp_list = sorted(self.lidar_file_timestamps.intersection(info_timestamps))
         assert len(self.timestamp_list) > 0, f"no timestamps found in {self.dataset_dir}"
@@ -285,13 +352,27 @@ class ArgoverseRawSequence(AbstractSequence):
             expected_shape=camera_shape,
         )
 
+    def _prep_per_point_feature_info(self) -> PerPointFeatureInfo:
+        assert self.per_point_feature_type is not None, "per_point_feature_type must be specified"
+        if self.per_point_feature_type == PerPointFeatureType.RGB:
+            feature_dir = self.dataset_dir / "sensors" / "lidar_color"
+        elif self.per_point_feature_type == PerPointFeatureType.DINOV2:
+            feature_dir = self.dataset_dir / "sensors" / f"lidar_dinov2_pca"
+        else:
+            raise ValueError(f"Unknown feature type {self.per_point_feature_type}")
+        return PerPointFeatureInfo(
+            feature_dir=feature_dir,
+            feature_type=self.per_point_feature_type
+        )
+
     def _load_lidar_info(self) -> tuple[list[Path], dict[int, Path], set[int]]:
-        # Load the lidar frame information.
-        lidar_frame_directory = self.dataset_dir / "sensors" / "lidar"
+        lidar_frame_directory = self.dataset_dir / "sensors" / self.lidar_source
         lidar_frame_paths = sorted(lidar_frame_directory.glob("*.feather"))
-        assert len(lidar_frame_paths) > 0, f"no frames found in {lidar_frame_directory}"
+        assert len(lidar_frame_paths) > 0, f"No frames found in {lidar_frame_directory}"
+
         timestamp_to_lidar_file_map = {int(e.stem): e for e in lidar_frame_paths}
         lidar_file_timestamps = set(timestamp_to_lidar_file_map.keys())
+
         return lidar_frame_paths, timestamp_to_lidar_file_map, lidar_file_timestamps
 
     def _load_rgb_info(self, camera_name: str) -> tuple[list[Path], dict[int, Path]]:
@@ -463,16 +544,27 @@ class ArgoverseRawSequence(AbstractSequence):
     def _timestamp_to_idx(self, timestamp: int) -> int:
         return self.timestamp_list.index(timestamp)
 
-    def _load_pc(self, idx) -> PointCloud:
+    def _load_pc(self, idx) -> tuple[PointCloud, Optional[np.ndarray]]:
         assert idx < len(self), f"idx {idx} out of range, len {len(self)} for {self.dataset_dir}"
         timestamp = self.timestamp_list[idx]
         frame_path = self.timestamp_to_lidar_file_map[timestamp]
         frame_content = pd.read_feather(frame_path)
+
         xs = frame_content["x"].values
         ys = frame_content["y"].values
         zs = frame_content["z"].values
         points = np.stack([xs, ys, zs], axis=1)
-        return PointCloud(points)
+        pc = PointCloud(points)
+
+        # Determine is_real mask
+        if "scan_id" in frame_content.columns:
+            is_real = (frame_content["scan_id"].values == 0)
+            assert len(is_real) == len(points), "Mismatch in point count and is_real mask length"
+        else:
+            is_real = None
+
+        return pc, is_real
+
 
     def _load_auxillary_pc(self, idx) -> PointCloud | None:
         if self.auxillary_pc_paths is None:
@@ -512,7 +604,7 @@ class ArgoverseRawSequence(AbstractSequence):
     ) -> tuple[TimeSyncedRawFrame, TimeSyncedAVLidarData]:
         assert idx < len(self), f"idx {idx} out of range, len {len(self)} for {self.dataset_dir}"
         timestamp = self.timestamp_list[idx]
-        ego_pc = self._load_pc(idx)
+        ego_pc, is_real = self._load_pc(idx)
         auxillary_ego_pc = self._load_auxillary_pc(idx)
 
         start_pose = self._load_pose(relative_to_idx)
@@ -534,6 +626,7 @@ class ArgoverseRawSequence(AbstractSequence):
             full_pc=ego_pc,
             pose=PoseInfo(sensor_to_ego=SE3.identity(), ego_to_global=relative_pose),
             mask=np.ones(len(ego_pc), dtype=bool),
+            is_real=is_real,
         )
 
         auxillary_pc_frame = None
@@ -552,11 +645,17 @@ class ArgoverseRawSequence(AbstractSequence):
             self.camera_names,
         )
 
+        if self.per_point_feature_type is not None:
+            per_point_features = self.per_point_feature_info.load_feature(idx)
+        else:
+            per_point_features = None
+
         return (
             TimeSyncedRawFrame(
                 pc=pc_frame,
                 auxillary_pc=auxillary_pc_frame,
                 rgbs=rgb_frames,
+                per_point_features=per_point_features,
                 log_id=self.log_id,
                 log_idx=idx,
                 log_timestamp=timestamp,
@@ -585,6 +684,7 @@ class ArgoverseRawSequenceLoader(CachedSequenceLoader):
         verbose: bool = False,
         num_sequences: Optional[int] = None,
         per_sequence_sample_every: Optional[int] = None,
+        per_point_feature_type: Optional[PerPointFeatureType | str] = None,
         expected_camera_shape: tuple[int, int, int] = (1550, 2048, 3),
         point_cloud_range: Optional[PointCloudRange] = DEFAULT_POINT_CLOUD_RANGE,
     ):
@@ -596,6 +696,7 @@ class ArgoverseRawSequenceLoader(CachedSequenceLoader):
         self.per_sequence_sample_every = per_sequence_sample_every
         self.expected_camera_shape = expected_camera_shape
         self.point_cloud_range = point_cloud_range
+        self.per_point_feature_type = per_point_feature_type
         assert self.dataset_dir.is_dir(), f"dataset_dir {sequence_dir} does not exist"
         self.log_lookup = {e.name: e for e in self.dataset_dir.glob("*/")}
         if log_subset is not None:
@@ -630,6 +731,7 @@ class ArgoverseRawSequenceLoader(CachedSequenceLoader):
             with_auxillary_pc=self.with_auxillary_pc,
             expected_camera_shape=self.expected_camera_shape,
             point_cloud_range=self.point_cloud_range,
+            per_point_feature_type=self.per_point_feature_type,
         )
 
     def cache_folder_name(self) -> str:

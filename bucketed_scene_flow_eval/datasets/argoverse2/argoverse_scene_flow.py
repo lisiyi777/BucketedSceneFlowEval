@@ -156,6 +156,7 @@ class ArgoverseSceneFlowSequence(ArgoverseRawSequence, AbstractAVLidarSequence):
             pc=supervised_pc,
             auxillary_pc=raw_item.auxillary_pc,
             rgbs=raw_item.rgbs,
+            per_point_features=raw_item.per_point_features,
             log_id=raw_item.log_id,
             log_idx=raw_item.log_idx,
             log_timestamp=raw_item.log_timestamp,
@@ -217,6 +218,7 @@ class ArgoverseSceneFlowSequence(ArgoverseRawSequence, AbstractAVLidarSequence):
     @staticmethod
     def category_name_to_id(category_name: str) -> int:
         return ArgoverseSceneFlowSequenceLoader.category_name_to_id(category_name)
+
 
 
 class ArgoverseSceneFlowSequenceLoader(CachedSequenceLoader):
